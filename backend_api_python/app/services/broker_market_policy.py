@@ -186,6 +186,12 @@ def validate_strategy_config(
     td = (trade_direction or "").strip().lower()
     bt = (bot_type or "").strip().lower()
 
+    # Signal-mode fast path: no exchange involved, skip all broker/market rules.
+    # This allows analysis-only markets (CNStock, HKStock, MOEX, Futures) to
+    # create signal strategies without requiring a broker or exchange.
+    if not ex and not require_exchange:
+        return
+
     # Rule 1: market is one we can route in live trading
     if mc and mc not in LIVE_MARKET_CATEGORIES:
         raise ValueError(
@@ -198,8 +204,6 @@ def validate_strategy_config(
     if not ex:
         if require_exchange:
             raise ValueError("exchange_id is required for live strategies.")
-        # Signal-mode: skip the rest. Direction/bot rules need a broker
-        # context to be meaningful.
         return
 
     if ex not in BROKER_MARKETS:
