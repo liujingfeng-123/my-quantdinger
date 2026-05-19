@@ -2764,11 +2764,11 @@ class TradingExecutor:
                             if _current_close > 0:
                                 merged_params['initial_price'] = _current_close
                                 logger.info(
-                                    "Strategy %s: auto-set initial_price from %.4f to %.4f (current close)",
-                                    strategy_id, float(_ip or 0), _current_close,
+                                    "Auto-set initial_price from %.4f to %.4f (current close)",
+                                    float(_ip or 0), _current_close,
                                 )
                 except Exception as _ip_err:
-                    logger.debug("Strategy %s: auto-set initial_price skipped: %s", strategy_id, _ip_err)
+                    logger.debug("Auto-set initial_price skipped: %s", _ip_err)
             
             # === 指标调用器支持 ===
             # 获取用户ID和指标ID（用于 call_indicator 权限检查）
