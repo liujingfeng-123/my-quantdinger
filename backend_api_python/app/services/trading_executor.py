@@ -15,6 +15,7 @@ except Exception:
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 import json
+import random
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 import pandas as pd
 import numpy as np
@@ -3085,6 +3086,23 @@ class TradingExecutor:
                     return True
 
                 # 更新数据库状态 (signal mode / local simulation)
+                # ── simulated fill price (slippage) & quantity rounding ──
+                _sim_slip_bps = float(os.getenv('SIMULATED_SLIPPAGE_BPS', '5'))
+                _sim_qty_dec = int(os.getenv('SIMULATED_QTY_DECIMALS', '6'))
+                # Random slippage in [0, _sim_slip_bps] basis points, adverse direction.
+                # Buy actions (open_long, add_long, close_short, reduce_short) → fill at higher price.
+                # Sell actions (open_short, add_short, close_long, reduce_long) → fill at lower price.
+                _sig_norm = (signal_type or '').strip().lower()
+                _is_buy_action = _sig_norm in ('open_long', 'add_long', 'close_short', 'reduce_short')
+                _slip = random.uniform(0, _sim_slip_bps) / 10000.0  # bps → decimal
+                _fill_price = current_price * (1 + _slip) if _is_buy_action else current_price * (1 - _slip)
+                if _fill_price <= 0:
+                    _fill_price = current_price
+                _fill_amount = round(float(amount or 0.0), _sim_qty_dec)
+                if _fill_amount <= 0:
+                    _fill_amount = float(amount or 0.0)  # fallback
+                # ── end simulation ──
+
                 # Prefer real exchange fee-rate; fall back to user-configured rate
                 _exchange_fee = self._exchange_fee_cache.get(strategy_id)
                 if _exchange_fee and _exchange_fee.get('taker', 0) > 0:
@@ -3093,32 +3111,33 @@ class TradingExecutor:
                     _comm_rate = float((trading_config or {}).get('commission', 0) or 0) / 100.0
                     if _comm_rate <= 0:
                         _comm_rate = 0.001
-                _est_commission = round(float(current_price or 0) * float(amount or 0) * _comm_rate, 8)
+                _est_commission = round(float(_fill_price or 0) * float(_fill_amount or 0) * _comm_rate, 8)
 
                 if 'open' in sig or 'add' in sig:
                     self._record_trade(
                         strategy_id=strategy_id, symbol=symbol, type=signal_type,
-                        price=current_price, amount=amount, value=amount*current_price,
+                        price=_fill_price, amount=_fill_amount,
+                        value=_fill_amount * _fill_price,
                         commission=_est_commission
                     )
                     side = 'short' if 'short' in signal_type else 'long'
                     
                     old_pos = next((p for p in current_positions if p['side'] == side), None)
-                    new_size = amount
-                    new_entry = current_price
+                    new_size = _fill_amount
+                    new_entry = _fill_price
                     if old_pos:
                         old_size = float(old_pos['size'])
                         old_entry = float(old_pos['entry_price'])
                         new_size += old_size
-                        new_entry = ((old_size * old_entry) + (amount * current_price)) / new_size
+                        new_entry = ((old_size * old_entry) + (_fill_amount * _fill_price)) / new_size
 
                     self._update_position(
                         strategy_id=strategy_id, symbol=symbol, side=side,
-                        size=new_size, entry_price=new_entry, current_price=current_price
+                        size=new_size, entry_price=new_entry, current_price=_fill_price
                     )
                     append_strategy_log(
                         strategy_id, "trade",
-                        f"Open position: {signal_type} {symbol} amount={amount:.6f} @ {current_price:.6f}, fee={_est_commission:.6f}",
+                        f"Open position: {signal_type} {symbol} amount={_fill_amount:.6f} @ {_fill_price:.6f}, fee={_est_commission:.6f}",
                     )
                 elif sig.startswith("reduce_"):
                     # Partial scale-out: reduce position size, keep entry price unchanged.
@@ -3131,31 +3150,32 @@ class TradingExecutor:
                     old_entry = float(old_pos.get('entry_price') or 0.0)
                     
                     reduce_profit = None
-                    if old_entry > 0 and amount > 0:
+                    if old_entry > 0 and _fill_amount > 0:
                         if side == 'long':
-                            reduce_profit = (current_price - old_entry) * amount
+                            reduce_profit = (_fill_price - old_entry) * _fill_amount
                         else:
-                            reduce_profit = (old_entry - current_price) * amount
+                            reduce_profit = (old_entry - _fill_price) * _fill_amount
                         reduce_profit = round(reduce_profit - _est_commission, 8)
 
                     self._record_trade(
                         strategy_id=strategy_id, symbol=symbol, type=signal_type,
-                        price=current_price, amount=amount, value=amount*current_price,
+                        price=_fill_price, amount=_fill_amount,
+                        value=_fill_amount * _fill_price,
                         profit=reduce_profit, commission=_est_commission
                     )
                     
-                    new_size = max(0.0, old_size - float(amount or 0.0))
+                    new_size = max(0.0, old_size - float(_fill_amount or 0.0))
                     if new_size <= old_size * 0.001:
                         self._close_position(strategy_id, symbol, side)
                     else:
                         self._update_position(
                             strategy_id=strategy_id, symbol=symbol, side=side,
-                            size=new_size, entry_price=old_entry, current_price=current_price
+                            size=new_size, entry_price=old_entry, current_price=_fill_price
                         )
                     _pstr = f", profit={reduce_profit:.4f}" if reduce_profit is not None else ""
                     append_strategy_log(
                         strategy_id, "trade",
-                        f"Reduce position: {signal_type} {symbol} amount={amount:.6f} @ {current_price:.6f}, fee={_est_commission:.6f}{_pstr}",
+                        f"Reduce position: {signal_type} {symbol} amount={_fill_amount:.6f} @ {_fill_price:.6f}, fee={_est_commission:.6f}{_pstr}",
                     )
                 elif 'close' in sig:
                     # 信号模式下计算平仓盈亏
@@ -3165,23 +3185,24 @@ class TradingExecutor:
                     close_profit = None
                     if old_pos:
                         entry_price = float(old_pos.get('entry_price') or 0)
-                        if entry_price > 0 and amount > 0:
+                        if entry_price > 0 and _fill_amount > 0:
                             if side == 'long':
-                                close_profit = (current_price - entry_price) * amount
+                                close_profit = (_fill_price - entry_price) * _fill_amount
                             else:
-                                close_profit = (entry_price - current_price) * amount
+                                close_profit = (entry_price - _fill_price) * _fill_amount
                             close_profit = round(close_profit - _est_commission, 8)
 
                     self._record_trade(
                         strategy_id=strategy_id, symbol=symbol, type=signal_type,
-                        price=current_price, amount=amount, value=amount*current_price,
+                        price=_fill_price, amount=_fill_amount,
+                        value=_fill_amount * _fill_price,
                         profit=close_profit, commission=_est_commission
                     )
                     self._close_position(strategy_id, symbol, side)
                     _pstr = f", profit={close_profit:.4f}" if close_profit is not None else ""
                     append_strategy_log(
                         strategy_id, "trade",
-                        f"Close position: {signal_type} {symbol} amount={amount:.6f} @ {current_price:.6f}, fee={_est_commission:.6f}{_pstr}",
+                        f"Close position: {signal_type} {symbol} amount={_fill_amount:.6f} @ {_fill_price:.6f}, fee={_est_commission:.6f}{_pstr}",
                     )
 
                 return True
