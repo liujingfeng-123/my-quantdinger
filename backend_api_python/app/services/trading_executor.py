@@ -2750,6 +2750,26 @@ class TradingExecutor:
             # 合并参数（用户值优先，否则使用默认值）
             merged_params = IndicatorParamsParser.merge_params(declared_params, user_indicator_params)
             
+            # 自动设置 initial_price：如果为 0 或未设置，取 K 线最新收盘价
+            # 这解决网格策略在 initial_price=0 时永远不产生信号的问题
+            if 'initial_price' in merged_params:
+                try:
+                    _ip = merged_params.get('initial_price')
+                    if _ip is None or (isinstance(_ip, (int, float)) and _ip <= 0):
+                        _close_col = df.get('close') if hasattr(df, 'get') else None
+                        if _close_col is None:
+                            _close_col = df['close'] if 'close' in df.columns else None
+                        if _close_col is not None and len(_close_col) > 0:
+                            _current_close = float(_close_col.iloc[-1])
+                            if _current_close > 0:
+                                merged_params['initial_price'] = _current_close
+                                logger.info(
+                                    "Strategy %s: auto-set initial_price from %.4f to %.4f (current close)",
+                                    strategy_id, float(_ip or 0), _current_close,
+                                )
+                except Exception as _ip_err:
+                    logger.debug("Strategy %s: auto-set initial_price skipped: %s", strategy_id, _ip_err)
+            
             # === 指标调用器支持 ===
             # 获取用户ID和指标ID（用于 call_indicator 权限检查）
             user_id = tc.get('user_id', 1)
