@@ -2532,7 +2532,7 @@ class TradingExecutor:
             # Check for 4-way columns after normalization
             if all(col in executed_df.columns for col in ['open_long', 'close_long', 'open_short', 'close_short']):
                 # 优化点3: 防“信号闪烁” (Repainting)
-                signal_mode = trading_config.get('signal_mode', 'confirmed') # 'confirmed' or 'aggressive'
+                signal_mode = trading_config.get('signal_mode', 'aggressive') # 'confirmed' or 'aggressive'
                 exit_signal_mode = trading_config.get('exit_signal_mode', 'aggressive') # 'confirmed' or 'aggressive'
                 
                 entry_check_set = set()
