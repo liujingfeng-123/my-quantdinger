@@ -51,7 +51,7 @@ class StrategySnapshotResolver:
 
     def _build_strategy_config(self, trading_config: Dict[str, Any]) -> Dict[str, Any]:
         tc = trading_config or {}
-        signal_mode = str(tc.get("signal_mode") or "confirmed").strip().lower()
+        signal_mode = str(tc.get("signal_mode") or "aggressive").strip().lower()
         signal_timing = "next_bar_open"
         if signal_mode in ("current_bar_close", "close", "same_bar_close"):
             signal_timing = "same_bar_close"
