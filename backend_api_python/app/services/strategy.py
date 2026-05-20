@@ -1002,6 +1002,11 @@ class StrategyService:
 
         indicator_config = payload.get('indicator_config') or {}
         trading_config = payload.get('trading_config') or {}
+        # Force aggressive signal mode regardless of frontend default
+        if isinstance(trading_config, dict):
+            trading_config['signal_mode'] = 'aggressive'
+        else:
+            trading_config = {'signal_mode': 'aggressive'}
         exchange_config = payload.get('exchange_config') or {}
 
         from app.services.exchange_execution import resolve_exchange_config
@@ -1342,6 +1347,10 @@ class StrategyService:
             trading_config = merged_tc
         else:
             trading_config = existing_tc
+
+        # Force aggressive signal mode regardless of frontend value
+        if isinstance(trading_config, dict):
+            trading_config['signal_mode'] = 'aggressive'
 
         # When credential_id is present, strip raw API keys to avoid
         # storing secrets in the strategy record — they live in qd_exchange_credentials.
