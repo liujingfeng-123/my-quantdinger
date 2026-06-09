@@ -1,13 +1,12 @@
 # ============================================================
-# Value-Select 选股 + RSRS 择时 — 截面策略指标 (Phase 1)
+# Value-Select 选股 + RSRS 择时 — 全自动截面策略
 # ============================================================
 #
 # 使用方法:
-# 1. 在 QuantDinger 中创建截面策略 (cs_strategy_type="cross_sectional")
+# 1. 在 QuantDinger 中创建截面策略
 # 2. symbol_list 第一个标的填写大盘指数 (如 CNStock:000300)
 #    后续标的填写候选股票池
 # 3. 将此代码粘贴到 Indicator 代码编辑器中
-# 4. 设置 timeframe="1D", rebalance_frequency="monthly"
 #
 # 策略逻辑:
 #   Step 1 — RSRS 判断大盘多空
@@ -15,9 +14,8 @@
 #     ✓ z_score < -0.7 → 空头 (全仓观望)
 #     ✓ 之间 → 中性 (维持现有持仓, 不新开仓)
 #
-#   Step 2 — 多头时执行价值选股
-#     Phase 1 (本代码): 用量价因子代理基本面评分
-#     Phase 2 (升级):   trading_config.fundamentals 中读取预计算基本面分
+#   Step 2 — 多头时用量价代理因子选股 (全自动, 无需外部数据)
+#     因子: 动量 40% + 波动稳定性 30% + 流动性 30%
 #
 #   Step 3 — 截面引擎每月调仓
 #     ✓ 排序 → 选 Top N → 生成买卖信号
@@ -137,25 +135,6 @@ def kline_quality_score(df):
     score = momentum * 0.4 + vol_score * 0.3 + liq_score * 0.3
     return max(score, 0.0)
 
-
-# ============================================================
-# 辅助函数: 从 trading_config 读取预计算基本面分
-# ============================================================
-def get_fundamental_score(symbol, config):
-    """
-    从 trading_config.fundamentals 读取预计算的基本面分。
-
-    如果不存在, 返回 None (触发量价 proxy 降级)。
-    """
-    try:
-        fund = config.get('fundamentals', {}).get(symbol, {})
-        if not fund or not isinstance(fund, dict):
-            return None
-        return fund.get('score')
-    except Exception:
-        return None
-
-
 # ============================================================
 # 主逻辑: 遍历标的, 填充 scores
 # ============================================================
@@ -197,24 +176,14 @@ elif market_regime == 0:
         scores[sym] = -1.0
 
 else:
-    # ====== 多头: 执行价值选股 ======
-    # 尝试读取 trading_config 中的预计算基本面分 (Phase 2)
-    # 回退到量价 proxy 评分 (Phase 1)
-    config = trading_config or {}
-
+    # ====== 多头: 全自动量价代理选股 ======
+    # 无需外部基本面数据, 完全基于 K 线计算
     for sym in stock_symbols:
         df = data.get(sym)
         if df is None or len(df) < RSRS_WINDOW:
             scores[sym] = 0.0
             continue
 
-        # 方式 A: 从 config.fundamentals 读取预计算基本面分
-        fund_score = get_fundamental_score(sym, config)
-        if fund_score is not None:
-            scores[sym] = fund_score
-            continue
-
-        # 方式 B: 量价代理评分 (Phase 1 fallback)
         proxy_score = kline_quality_score(df)
         scores[sym] = proxy_score
 
